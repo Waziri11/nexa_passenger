@@ -1,0 +1,55 @@
+{
+  "expo": {
+    "name": "Nexadrop",
+    "slug": "flash-passenger",
+    "scheme": "nexadrop",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "bundleIdentifier": "com.stryxis.flash.passenger",
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.stryxis.flash.passenger",
+      "adaptiveIcon": {
+        "foregroundImage": "./vendor/mobile/assets/nexadrop-icon.png",
+        "backgroundColor": "#F5F6F7"
+      }
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Nexadrop uses your location for pickup and active trips."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Select driver verification photographs.",
+          "microphonePermission": "Nexadrop uses the microphone for calls between passengers and drivers."
+        }
+      ],
+      "expo-notifications",
+      "expo-system-ui"
+    ],
+    "owner": "joleen",
+    "extra": {
+      "eas": {
+        "projectId": "98e8dce5-421c-4106-96a1-67b2458430c2"
+      }
+    },
+    "icon": "./vendor/mobile/assets/nexadrop-icon.png",
+    "splash": {
+      "image": "./vendor/mobile/assets/nexadrop-splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F5F6F7"
+    },
+    "platforms": [
+      "ios",
+      "android"
+    ]
+  }
+}
