@@ -1,5 +1,23 @@
 import { z } from 'zod';
-export const categories = ['boda', 'bajaji', 'car'] as const;
+export const rideCategories = ['boda', 'bajaji', 'car'] as const;
+export const categories = [
+  ...rideCategories,
+  'toyo',
+  'kirikuu',
+  'truck',
+] as const;
+export type RideCategory = (typeof rideCategories)[number];
+export type ServiceKind = 'ride' | 'delivery';
+export const deliveryBookingEnabled = false;
+export function cargoOnly(category: Category) {
+  return category === 'toyo' || category === 'kirikuu' || category === 'truck';
+}
+export const cargoSchema = z.object({
+  description: z.string().trim().min(3).max(1000),
+  estimatedWeightKg: z.number().finite().positive(),
+  fragile: z.boolean(),
+});
+export type Cargo = z.infer<typeof cargoSchema>;
 export type Category = (typeof categories)[number];
 export type Role = 'passenger' | 'driver' | 'admin';
 export type Point = { latitude: number; longitude: number };
@@ -28,7 +46,7 @@ export type Tariff = {
   freeWaitingSeconds: number;
   rounding?: 'up_500' | 'whole_tzs';
 };
-export const tariffs: Record<Category, Tariff> = {
+export const tariffs: Record<RideCategory, Tariff> = {
   boda: {
     version: '2026-05-01',
     rounding: 'up_500',
@@ -64,6 +82,9 @@ export const subscriptions: Record<Category, number> = {
   boda: 20000,
   bajaji: 30000,
   car: 40000,
+  toyo: 40000,
+  kirikuu: 50000,
+  truck: 70000,
 };
 export type SubscriptionMonths = 1 | 12;
 export function subscriptionAmount(
@@ -183,17 +204,41 @@ export const registrationSchema = z.object({
   marketingConsent: z.boolean().default(false),
   role: z.enum(['passenger', 'driver']),
 });
-export const requestSchema = z.object({
-  pickup: pointSchema,
-  destination: pointSchema,
-  pickupLabel: z.string().min(2).max(200),
-  destinationLabel: z.string().min(2).max(200),
-  category: z.enum(categories),
-  stops: z
-    .array(pointSchema.extend({ label: z.string().min(2).max(200) }))
-    .max(3)
-    .default([]),
-});
+export const requestSchema = z
+  .object({
+    serviceKind: z.enum(['ride', 'delivery']).default('ride'),
+    cargo: cargoSchema.optional(),
+    pickup: pointSchema,
+    destination: pointSchema,
+    pickupLabel: z.string().min(2).max(200),
+    destinationLabel: z.string().min(2).max(200),
+    category: z.enum(categories),
+    stops: z
+      .array(pointSchema.extend({ label: z.string().min(2).max(200) }))
+      .max(3)
+      .default([]),
+  })
+  .superRefine((value, ctx) => {
+    if (value.serviceKind === 'ride' && cargoOnly(value.category))
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['category'],
+        message: 'Cargo-only vehicles cannot carry passengers',
+      });
+    if (value.serviceKind === 'delivery' && !value.cargo)
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['cargo'],
+        message: 'Describe the cargo, weight and fragile status',
+      });
+    if (value.serviceKind === 'ride' && value.cargo)
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['cargo'],
+        message: 'Cargo belongs to a delivery request',
+      });
+  });
+
 export const driverSchema = z.object({
   category: z.enum(categories),
   plate: z.string().trim().min(4).max(20),
@@ -207,6 +252,10 @@ export const driverSchema = z.object({
 });
 export const translations = {
   sw: {
+    fleet: 'Magari',
+    toyo: 'Toyo',
+    kirikuu: 'Kirikuu',
+    truck: 'Lori',
     home: 'Nyumbani',
     trips: 'Safari',
     account: 'Akaunti',
@@ -224,7 +273,7 @@ export const translations = {
     email: 'Barua pepe',
     verify: 'Thibitisha',
     otp: 'Nambari ya uthibitisho',
-    welcome: 'Karibu Flash',
+    welcome: 'Karibu Nexadrop',
     tagline: 'Safari yako. Kwa urahisi.',
     online: 'Anza kupokea safari',
     offline: 'Acha kupokea safari',
@@ -254,6 +303,10 @@ export const translations = {
     delete: 'Futa akaunti',
   },
   en: {
+    fleet: 'Fleet',
+    toyo: 'Toyo',
+    kirikuu: 'Kirikuu',
+    truck: 'Truck',
     home: 'Home',
     trips: 'Trips',
     account: 'Account',
@@ -271,7 +324,7 @@ export const translations = {
     email: 'Email address',
     verify: 'Verify',
     otp: 'Verification code',
-    welcome: 'Welcome to Flash',
+    welcome: 'Welcome to Nexadrop',
     tagline: 'Your city. Your way.',
     online: 'Go online',
     offline: 'Go offline',

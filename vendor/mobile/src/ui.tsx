@@ -9,12 +9,14 @@ export function Button({
   secondary = false,
   danger = false,
   disabled = false,
+  tone,
 }: {
   title: string;
   onPress: () => void;
   secondary?: boolean;
   danger?: boolean;
   disabled?: boolean;
+  tone?: 'delivery';
 }) {
   const { s, colors } = useTheme();
   return (
@@ -25,6 +27,10 @@ export function Button({
       style={[
         s.button,
         secondary && s.secondary,
+        tone === 'delivery' && {
+          backgroundColor: '#087F5B',
+          borderColor: '#31A97E',
+        },
         danger && { backgroundColor: colors.danger },
         disabled && { opacity: 0.45 },
       ]}
@@ -33,6 +39,7 @@ export function Button({
         style={[
           s.buttonText,
           secondary && { color: colors.blue },
+          tone === 'delivery' && { color: '#FFFFFF' },
           danger && { color: colors.onPrimary },
         ]}
       >

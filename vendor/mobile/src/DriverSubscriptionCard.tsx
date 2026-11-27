@@ -3,6 +3,7 @@ import React from 'react';
 import { Pressable, View } from 'react-native';
 import {
   money,
+  cargoOnly,
   subscriptionAmount,
   subscriptionDue,
   type Category,
@@ -38,11 +39,16 @@ export function DriverSubscriptionCard({
         {sw ? 'Usajili wa dereva' : 'Driver subscription'}
       </Text>
       <Text style={s.bold}>
-        {category === 'car'
-          ? 'Car Basic'
-          : category === 'bajaji'
-            ? 'Bajaji'
-            : 'Boda'}
+        {
+          {
+            boda: 'Boda',
+            bajaji: 'Bajaji',
+            car: 'Car Basic',
+            toyo: 'Toyo',
+            kirikuu: 'Kirikuu',
+            truck: sw ? 'Lori' : 'Truck',
+          }[category]
+        }
       </Text>
       {status.due && (
         <View style={s.row}>
@@ -89,7 +95,13 @@ export function DriverSubscriptionCard({
           })}
         </Text>
       )}
-      {status.due ? (
+      {cargoOnly(category) ? (
+        <Text style={s.small}>
+          {sw
+            ? 'Usajili huu haujaanza kutozwa. Malipo na majaribio vitaanza baada ya huduma ya usafirishaji kuwezeshwa.'
+            : 'This plan is not being charged yet. Payment and trial activation await delivery launch.'}
+        </Text>
+      ) : status.due ? (
         approved ? (
           <Button
             title={sw ? 'Lipa usajili' : 'Recharge subscription'}

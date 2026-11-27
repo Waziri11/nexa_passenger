@@ -329,6 +329,8 @@ export const createStyles = (colors: ThemePalette) =>
       borderColor: colors.border,
     },
     button: {
+      borderWidth: 1,
+      borderColor: colors.blueBorder,
       backgroundColor: colors.primary,
       borderRadius: 14,
       padding: 17,

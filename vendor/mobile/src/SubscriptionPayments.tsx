@@ -28,6 +28,7 @@ export function SubscriptionPayments({
   onClose,
   language,
   phone,
+  vehicleId,
   onPaid,
   periodMonths,
   onPeriodChange,
@@ -36,6 +37,7 @@ export function SubscriptionPayments({
   onClose: () => void;
   language: Language;
   phone: string;
+  vehicleId?: string;
   onPaid: () => Promise<void>;
   periodMonths: SubscriptionMonths;
   onPeriodChange: (p: SubscriptionMonths) => void;
@@ -77,7 +79,11 @@ export function SubscriptionPayments({
   async function refresh() {
     const [capabilities, subscription] = await Promise.all([
       api('/subscriptions/methods'),
-      api('/subscriptions'),
+      api(
+        vehicleId
+          ? '/fleet/vehicles/' + vehicleId + '/subscription'
+          : '/subscriptions',
+      ),
     ]);
     setMethods(capabilities.methods);
     setAvailable(capabilities.available);
@@ -123,7 +129,7 @@ export function SubscriptionPayments({
     setPayer(phone);
     setSelected(null);
     void run(refresh);
-  }, [visible]);
+  }, [visible, vehicleId]);
   useEffect(() => {
     if (!visible || !active) return;
     let stopped = false,
@@ -314,6 +320,7 @@ export function SubscriptionPayments({
                     const o = await api('/subscriptions/orders', {
                       requestId: requestKey,
                       method,
+                      ...(vehicleId ? { vehicleId } : {}),
                       phone: payer,
                       periodMonths,
                     });

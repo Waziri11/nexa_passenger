@@ -17,7 +17,7 @@ export type SubscriptionPaymentSummary = {
   amount: number;
   currency: 'TZS';
   periodMonths: 1 | 12;
-  category: 'boda' | 'bajaji' | 'car';
+  category: import('./index').Category;
   status: SubscriptionPaymentStatus;
   environment: 'sandbox' | 'live';
   simulated: boolean;

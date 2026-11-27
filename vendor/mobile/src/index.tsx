@@ -1,3 +1,12 @@
+import { FleetManager } from './FleetManager';
+import {
+  ServiceChoice,
+  CargoFields,
+  CargoSummary,
+  parseCargo,
+  emptyCargo,
+  type CargoDraft,
+} from './DeliveryFlow';
 import { RideChat } from './RideChat';
 import { ThemeProvider, useTheme } from './theme';
 import { Text, TextInput } from './themed-primitives';
@@ -41,6 +50,10 @@ import { io } from 'socket.io-client';
 import {
   passengerCancelCodes,
   money,
+  rideCategories,
+  cargoOnly,
+  type ServiceKind,
+  type RideCategory,
   fare,
   tariffs,
   subscriptions,
@@ -92,18 +105,28 @@ type User = {
   role: string;
   language?: Language;
 };
-type Tab = 'home' | 'trips' | 'account' | 'towing';
+type Tab = 'home' | 'trips' | 'account' | 'towing' | 'fleet';
 const places: Place[] = [
   { label: 'Posta, Dar es Salaam', latitude: -6.816, longitude: 39.289 },
   { label: 'Mlimani City, Dar es Salaam', latitude: -6.772, longitude: 39.219 },
   { label: 'Masaki, Dar es Salaam', latitude: -6.754, longitude: 39.276 },
   { label: 'Kariakoo, Dar es Salaam', latitude: -6.821, longitude: 39.274 },
 ];
-const categories: Category[] = ['boda', 'bajaji', 'car'];
+const categories: Category[] = [
+  'boda',
+  'bajaji',
+  'car',
+  'toyo',
+  'kirikuu',
+  'truck',
+];
 const icons = {
   boda: 'bicycle-outline',
   bajaji: 'bus-outline',
   car: 'car-sport-outline',
+  toyo: 'bus-outline',
+  kirikuu: 'car-outline',
+  truck: 'cube-outline',
 } as const;
 const photoKeys = [
   'profilePhoto',
@@ -171,6 +194,16 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
     [marketing, setMarketing] = useState(false),
     [authSent, setAuthSent] = useState(false),
     [otp, setOtp] = useState('');
+  const [serviceKind, setServiceKind] = useState<ServiceKind>('ride');
+  const [isFleetOwner, setIsFleetOwner] = useState(false);
+  const [serviceChooser, setServiceChooser] = useState(false);
+  const [vehicleLimits, setVehicleLimits] = useState<
+    Record<string, number | null>
+  >({});
+  const [deliveryStep, setDeliveryStep] = useState<'cargo' | 'vehicle'>(
+    'cargo',
+  );
+  const [cargoDraft, setCargoDraft] = useState<CargoDraft>(emptyCargo);
   const [billingMonths, setBillingMonths] = useState<SubscriptionMonths>(1);
   const [profile, setProfile] = useState<any>(null),
     [history, setHistory] = useState<any[]>([]),
@@ -527,6 +560,7 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
           if (me.user.role !== role) throw new Error('Session expired');
           setUser(me.user);
           setProfile(me.driver);
+          setIsFleetOwner(!!me.fleetOwner);
           if (!language && me.user.language) setLang(me.user.language);
           if (me.driver) setCategory(me.driver.category);
         }
@@ -709,7 +743,16 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
   }
   const [driverAvailable, setDriverAvailable] = useState(true);
   const [availabilityLoaded, setAvailabilityLoaded] = useState(false);
-  driverAvailableRef.current = driverAvailable;
+  driverAvailableRef.current =
+    driverAvailable &&
+    !cargoOnly(category) &&
+    (preview || profile?.approval === 'approved');
+  useEffect(() => {
+    if (role === 'driver' && cargoOnly(category)) {
+      setDriverAvailable(false);
+      setOffers([]);
+    }
+  }, [category, role]);
   useEffect(() => {
     setAvailabilityLoaded(false);
     if (!user?.id) return;
@@ -725,6 +768,10 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
     };
   }, [user?.id]);
   async function toggleAvailability() {
+    if (cargoOnly(category)) {
+      setDriverAvailable(false);
+      return;
+    }
     const online = !driverAvailable;
     if (!preview)
       await api(
@@ -781,7 +828,7 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
           }
           if (cancelled) return;
           await previewApi('/availability', {
-            online: driverAvailable,
+            online: driverAvailable && !cargoOnly(category),
             category,
             point,
             ...(profileRef.current?.vehicle_color
@@ -797,7 +844,7 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
             Constants.executionEnvironment !== 'storeClient'
           ) {
             await configureTracking({
-              online: driverAvailable,
+              online: driverAvailable && !cargoOnly(category),
               language: lang,
               previewAuth: auth,
               category,
@@ -1021,7 +1068,7 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
                   next.estimate = {
                     route: trip.value,
                     fare: fare(
-                      tariffs[r.category as Category],
+                      tariffs[r.category as RideCategory],
                       trip.value.meters,
                       trip.value.seconds,
                     ),
@@ -1261,7 +1308,7 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
     setRouteReady(false);
     setSearch('');
   }
-  async function calculateQuotes() {
+  async function calculateQuotes(kind: ServiceKind = serviceKind) {
     if (!destination) throw new Error(t.destination);
     const body = {
       pickup,
@@ -1272,21 +1319,28 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
     };
     if (!pickupKnown) throw new Error(t.locationRequired);
     let entries;
-    if (preview) {
+    if (preview || kind === 'delivery') {
       const routed = await api('/maps/route', { pickup, destination, stops });
       if (routed.simulated) throw new Error(t.mapsUnavailable);
-      entries = categories.map((c) => [
+      entries = (kind === 'ride' ? rideCategories : categories).map((c) => [
         c,
         {
-          fare: fare(tariffs[c], routed.meters, routed.seconds),
+          fare:
+            kind === 'delivery'
+              ? null
+              : fare(tariffs[c as RideCategory], routed.meters, routed.seconds),
           route: routed,
         },
       ]);
     } else
       entries = await Promise.all(
-        categories.map(async (c) => [
+        rideCategories.map(async (c) => [
           c,
-          await api('/estimates', { ...body, category: c }),
+          await api('/estimates', {
+            ...body,
+            category: c,
+            serviceKind: 'ride',
+          }),
         ]),
       );
     setQuotes(Object.fromEntries(entries));
@@ -1296,6 +1350,12 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
     setSearchOpen(false);
   }
   async function request() {
+    if (serviceKind === 'delivery')
+      throw new Error(
+        lang === 'sw'
+          ? 'Bei za usafirishaji bado hazijawekwa.'
+          : 'Delivery pricing is not configured yet.',
+      );
     if (!destination) return;
     setUnavailableCategory(null);
     const body = {
@@ -1305,6 +1365,7 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
       destinationLabel: destination.label,
       stops,
       category,
+      serviceKind,
     };
     if (preview)
       setRide(
@@ -1660,7 +1721,9 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
   const selectedQuote = quotes[category];
   const active = !terminal(ride);
   const verificationNeeded =
-    !profile?.submitted_at || profile?.approval === 'rejected';
+    (!profile?.submitted_at || profile?.approval === 'rejected') &&
+    profile?.standalone !== false &&
+    !(isFleetOwner && !profile);
   const vehicleLabel = (c: Category) => t[c];
   const placeLabel = (p: Place) =>
     p.current ? t.current : p.placeholder ? t.stop : p.label;
@@ -1756,6 +1819,7 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
         </Text>
       ))}
       <Text style={s.bold}>{r.destination_label}</Text>
+      <CargoSummary cargo={r.cargo} language={lang} />
     </View>
   );
   if (!ready)
@@ -1798,9 +1862,11 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
                   ? settingsOpen
                     ? accountWords[lang].settings
                     : t.account
-                  : tab === 'towing'
-                    ? t.towing
-                    : ''}
+                  : tab === 'fleet'
+                    ? t.fleet
+                    : tab === 'towing'
+                      ? t.towing
+                      : ''}
             </Text>
           )}
           <Pressable
@@ -2273,6 +2339,24 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
                                 </>
                               ) : (
                                 <>
+                                  <View style={s.rowBetween}>
+                                    <Text style={s.heading}>
+                                      {serviceKind === 'delivery'
+                                        ? lang === 'sw'
+                                          ? 'Usafirishaji wa mzigo'
+                                          : 'Delivery'
+                                        : lang === 'sw'
+                                          ? 'Safari ya abiria'
+                                          : 'Passenger ride'}
+                                    </Text>
+                                    <Pressable
+                                      onPress={() => setServiceChooser(true)}
+                                    >
+                                      <Text style={s.link}>
+                                        {lang === 'sw' ? 'Badilisha' : 'Change'}
+                                      </Text>
+                                    </Pressable>
+                                  </View>
                                   {selectedQuote && (
                                     <View style={s.card}>
                                       <Text style={s.heading}>
@@ -2291,69 +2375,202 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
                                       {compatibilityNotice()}
                                     </View>
                                   )}
-                                  {categories.map((c) => (
-                                    <Pressable
-                                      key={c}
-                                      accessibilityRole="radio"
-                                      accessibilityState={{
-                                        checked: category === c,
-                                      }}
-                                      onPress={() => setCategory(c)}
-                                      style={[
-                                        s.rideOption,
-                                        category === c && s.rideOptionSelected,
-                                      ]}
-                                    >
-                                      <Ionicons
-                                        name={icons[c]}
-                                        size={33}
-                                        color={colors.navy}
+                                  {serviceKind === 'delivery' &&
+                                  deliveryStep === 'cargo' ? (
+                                    <>
+                                      <CargoFields
+                                        value={cargoDraft}
+                                        onChange={setCargoDraft}
+                                        language={lang}
                                       />
-                                      <View style={{ flex: 1, gap: 4 }}>
-                                        <Text style={s.heading}>
-                                          {vehicleLabel(c)}
-                                        </Text>
+                                      <Button
+                                        title={
+                                          lang === 'sw'
+                                            ? 'Chagua usafiri'
+                                            : 'Select transport'
+                                        }
+                                        disabled={
+                                          !parseCargo(cargoDraft).success ||
+                                          busy
+                                        }
+                                        onPress={() => {
+                                          void run(async () => {
+                                            const result = await api(
+                                              '/delivery/options',
+                                              {
+                                                pickup,
+                                                estimatedWeightKg: Number(
+                                                  cargoDraft.weight.replace(
+                                                    ',',
+                                                    '.',
+                                                  ),
+                                                ),
+                                              },
+                                            );
+                                            setVehicleLimits(
+                                              Object.fromEntries(
+                                                result.options.map((o: any) => [
+                                                  o.category,
+                                                  o.maxPayloadKg,
+                                                ]),
+                                              ),
+                                            );
+                                            setDeliveryStep('vehicle');
+                                            setExpanded(true);
+                                          });
+                                        }}
+                                      />
+                                    </>
+                                  ) : (
+                                    <>
+                                      {serviceKind === 'delivery' && (
+                                        <>
+                                          <CargoSummary
+                                            cargo={
+                                              parseCargo(cargoDraft).success
+                                                ? {
+                                                    description:
+                                                      cargoDraft.description,
+                                                    estimatedWeightKg: Number(
+                                                      cargoDraft.weight.replace(
+                                                        ',',
+                                                        '.',
+                                                      ),
+                                                    ),
+                                                    fragile: cargoDraft.fragile,
+                                                  }
+                                                : undefined
+                                            }
+                                            language={lang}
+                                          />
+                                          <Pressable
+                                            onPress={() =>
+                                              setDeliveryStep('cargo')
+                                            }
+                                          >
+                                            <Text style={s.link}>
+                                              {lang === 'sw'
+                                                ? 'Hariri maelezo ya mzigo'
+                                                : 'Edit cargo details'}
+                                            </Text>
+                                          </Pressable>
+                                          <Text style={s.heading}>
+                                            {lang === 'sw'
+                                              ? 'Chagua usafiri'
+                                              : 'Select transport'}
+                                          </Text>
+                                          <Text style={s.small}>
+                                            {lang === 'sw'
+                                              ? 'Uzito wa mzigo lazima uendane na uwezo uliothibitishwa wa gari. Mapendekezo ya uwezo na bei bado hayajawezeshwa.'
+                                              : 'Cargo weight must fit the vehicle’s verified payload. Capacity matching and pricing are not enabled yet.'}
+                                          </Text>
+                                        </>
+                                      )}
+                                      {(serviceKind === 'ride'
+                                        ? rideCategories
+                                        : categories
+                                      ).map((c) => (
+                                        <Pressable
+                                          key={c}
+                                          accessibilityRole="radio"
+                                          accessibilityState={{
+                                            checked: category === c,
+                                          }}
+                                          disabled={
+                                            serviceKind === 'delivery' &&
+                                            vehicleLimits[c] != null &&
+                                            Number(
+                                              cargoDraft.weight.replace(
+                                                ',',
+                                                '.',
+                                              ),
+                                            ) > vehicleLimits[c]!
+                                          }
+                                          onPress={() => setCategory(c)}
+                                          style={[
+                                            s.rideOption,
+                                            category === c &&
+                                              s.rideOptionSelected,
+                                          ]}
+                                        >
+                                          <Ionicons
+                                            name={icons[c]}
+                                            size={33}
+                                            color={colors.navy}
+                                          />
+                                          <View style={{ flex: 1, gap: 4 }}>
+                                            <Text style={s.heading}>
+                                              {vehicleLabel(c)}
+                                            </Text>
+                                            <Text style={s.small}>
+                                              {(
+                                                (quotes[c]?.route.meters || 0) /
+                                                1000
+                                              ).toFixed(2)}{' '}
+                                              km ·{' '}
+                                              {Math.ceil(
+                                                (quotes[c]?.route.seconds ||
+                                                  0) / 60,
+                                              )}{' '}
+                                              {t.minutes}
+                                            </Text>
+                                            {serviceKind === 'delivery' && (
+                                              <Text style={s.small}>
+                                                {vehicleLimits[c] != null
+                                                  ? `${lang === 'sw' ? 'Uwezo uliothibitishwa' : 'Verified payload'}: ${vehicleLimits[c]} kg`
+                                                  : lang === 'sw'
+                                                    ? 'Uwezo wa gari bado haujathibitishwa'
+                                                    : 'No verified vehicle capacity available'}
+                                              </Text>
+                                            )}
+                                          </View>
+                                          {serviceKind === 'ride' && (
+                                            <Text style={s.optionPrice}>
+                                              {quotes[c]?.fare
+                                                ? money(quotes[c].fare.total)
+                                                : '—'}
+                                            </Text>
+                                          )}
+                                          <Ionicons
+                                            name={
+                                              category === c
+                                                ? 'radio-button-on'
+                                                : 'radio-button-off'
+                                            }
+                                            size={21}
+                                            color={
+                                              category === c
+                                                ? colors.blue
+                                                : colors.muted
+                                            }
+                                          />
+                                        </Pressable>
+                                      ))}
+
+                                      {serviceKind === 'delivery' && (
                                         <Text style={s.small}>
-                                          {(
-                                            (quotes[c]?.route.meters || 0) /
-                                            1000
-                                          ).toFixed(2)}{' '}
-                                          km ·{' '}
-                                          {Math.ceil(
-                                            (quotes[c]?.route.seconds || 0) /
-                                              60,
-                                          )}{' '}
-                                          {t.minutes}
+                                          {lang === 'sw'
+                                            ? 'Bei itategemea umbali na usafiri unaofaa mzigo wako. Bei za usafirishaji bado hazijawekwa.'
+                                            : 'Pricing will depend on distance and transport suitable for your cargo. Delivery rates have not been configured.'}
                                         </Text>
-                                      </View>
-                                      <Text style={s.optionPrice}>
-                                        {quotes[c]
-                                          ? money(quotes[c].fare.total)
-                                          : '—'}
-                                      </Text>
-                                      <Ionicons
-                                        name={
-                                          category === c
-                                            ? 'radio-button-on'
-                                            : 'radio-button-off'
-                                        }
-                                        size={21}
-                                        color={
-                                          category === c
-                                            ? colors.blue
-                                            : colors.muted
-                                        }
-                                      />
-                                    </Pressable>
-                                  ))}
+                                      )}
+                                    </>
+                                  )}
                                   <Pressable onPress={() => void openSearch()}>
                                     <Text style={s.link}>
                                       {t.pickup}: {placeLabel(pickup)} →{' '}
                                       {destination?.label}
                                     </Text>
                                   </Pressable>
-                                  <Text style={s.small}>{t.waiting}</Text>
-                                  <Text style={s.small}>{t.fareRounding}</Text>
+                                  {serviceKind === 'ride' && (
+                                    <Text style={s.small}>{t.waiting}</Text>
+                                  )}
+                                  {(serviceKind === 'ride' ||
+                                    deliveryStep === 'vehicle') && (
+                                    <Text style={s.small}>
+                                      {t.fareRounding}
+                                    </Text>
+                                  )}
                                 </>
                               )}
                             </>
@@ -2361,7 +2578,7 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
                             <>
                               <View style={s.rowBetween}>
                                 <Text style={s.bold}>
-                                  {driverAvailable
+                                  {driverAvailable && !cargoOnly(category)
                                     ? t.driverOnline
                                     : t.driverOffline}
                                 </Text>
@@ -2370,16 +2587,21 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
                                     driverAvailable ? t.goOffline : t.goOnline
                                   }
                                   secondary
-                                  disabled={busy}
+                                  disabled={busy || cargoOnly(category)}
                                   onPress={() => void run(toggleAvailability)}
                                 />
                               </View>
                               <Text style={s.subtitle}>
-                                {!driverAvailable
-                                  ? t.offlineHelp
-                                  : profile?.approval === 'approved' || preview
-                                    ? t.waitingRequests
-                                    : t.verificationNeeded}
+                                {cargoOnly(category)
+                                  ? lang === 'sw'
+                                    ? 'Huduma ya usafirishaji inasubiri bei. Hakuna usajili unaotozwa au maombi yanayopokelewa bado.'
+                                    : 'Delivery pricing is pending. No subscription is being charged and no requests can be received yet.'
+                                  : !driverAvailable
+                                    ? t.offlineHelp
+                                    : profile?.approval === 'approved' ||
+                                        preview
+                                      ? t.waitingRequests
+                                      : t.verificationNeeded}
                               </Text>
                               {offers.map((offer) => (
                                 <View key={offer.id} style={s.card}>
@@ -2796,6 +3018,16 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
                       ))}
                     </>
                   )}
+                  {tab === 'fleet' && role === 'driver' && (
+                    <FleetManager
+                      language={lang}
+                      phone={user.phone}
+                      onOwnership={setIsFleetOwner}
+                      onActivated={() => {
+                        if (!preview) void refresh().catch(setError);
+                      }}
+                    />
+                  )}
                   {tab === 'towing' && role === 'driver' && (
                     <>
                       {!towing.length && (
@@ -2847,6 +3079,20 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
                         )}
                       </View>
                       {role === 'driver' && (
+                        <View style={s.card}>
+                          <Text style={s.small}>
+                            {lang === 'sw'
+                              ? 'Unamiliki magari bila kuendesha? Tumia Magari kusajili magari na kualika madereva. Leseni yako inahitajika tu kama wewe utaendesha.'
+                              : 'Own vehicles without driving? Use Fleet to register them and invite drivers. Your personal licence is needed only if you drive.'}
+                          </Text>
+                          <Button
+                            secondary
+                            title={t.fleet}
+                            onPress={() => setTab('fleet')}
+                          />
+                        </View>
+                      )}
+                      {role === 'driver' && (
                         <>
                           {verificationNeeded && (
                             <Pressable
@@ -2876,7 +3122,7 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
                                 {t.verificationHelp}
                               </Text>
                               <Text style={s.label}>{t.vehicleType}</Text>
-                              <View style={s.row}>
+                              <View style={[s.row, { flexWrap: 'wrap' }]}>
                                 {categories.map((c) => (
                                   <Pressable
                                     key={c}
@@ -2973,21 +3219,23 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
                               />
                             </>
                           )}
-                          <DriverSubscriptionCard
-                            driver={
-                              subscription?.driver || profile || { category }
-                            }
-                            language={lang}
-                            period={billingMonths}
-                            onPeriod={setBillingMonths}
-                            currentPeriod={
-                              subscription?.currentPeriodMonths ?? 1
-                            }
-                            pay={() => {
-                              if (preview) setNotice('previewPayment');
-                              else setPaymentOpen(true);
-                            }}
-                          />
+                          {!(isFleetOwner && !profile) && (
+                            <DriverSubscriptionCard
+                              driver={
+                                subscription?.driver || profile || { category }
+                              }
+                              language={lang}
+                              period={billingMonths}
+                              onPeriod={setBillingMonths}
+                              currentPeriod={
+                                subscription?.currentPeriodMonths ?? 1
+                              }
+                              pay={() => {
+                                if (preview) setNotice('previewPayment');
+                                else setPaymentOpen(true);
+                              }}
+                            />
+                          )}
                         </>
                       )}
                       <Pressable
@@ -3033,25 +3281,37 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
               )}
               {busy && <ActivityIndicator color={colors.blue} />}
             </ScrollView>
-            {mapHome && role === 'passenger' && routeReady && !ride && (
-              <View style={s.bookingDock}>
-                <Button
-                  title={t.confirmRide}
-                  disabled={!selectedQuote || busy}
-                  onPress={() => setConfirmation(true)}
-                />
-                <Text style={[s.small, { textAlign: 'center' }]}>
-                  {t.payment}
-                </Text>
-              </View>
-            )}
+            {mapHome &&
+              role === 'passenger' &&
+              routeReady &&
+              !ride &&
+              (serviceKind === 'ride' || deliveryStep === 'vehicle') && (
+                <View style={s.bookingDock}>
+                  <Button
+                    title={
+                      serviceKind === 'delivery'
+                        ? lang === 'sw'
+                          ? 'Bei za usafirishaji hazijawekwa'
+                          : 'Delivery pricing pending'
+                        : t.confirmRide
+                    }
+                    disabled={
+                      !selectedQuote || busy || serviceKind === 'delivery'
+                    }
+                    onPress={() => setConfirmation(true)}
+                  />
+                  <Text style={[s.small, { textAlign: 'center' }]}>
+                    {t.payment}
+                  </Text>
+                </View>
+              )}
           </View>
         </KeyboardAvoidingView>
       </View>
       {user && (
         <View accessibilityRole="tablist" style={s.tabs}>
           {(role === 'driver'
-            ? (['home', 'trips', 'towing', 'account'] as const)
+            ? (['home', 'trips', 'fleet', 'towing', 'account'] as const)
             : (['home', 'trips', 'account'] as const)
           ).map((key) => (
             <Pressable
@@ -3081,6 +3341,7 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
                         trips: 'time-outline',
                         account: 'person-outline',
                         towing: 'construct-outline',
+                        fleet: 'car-outline',
                       } as const
                     )[key]
                   }
@@ -3505,12 +3766,27 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
                   selectingPlace ||
                   stops.some((p) => p.placeholder)
                 }
-                onPress={() => void run(calculateQuotes)}
+                onPress={() => {
+                  setSearchOpen(false);
+                  setTimeout(() => setServiceChooser(true), 400);
+                }}
               />
             </View>
           </KeyboardAvoidingView>
         </SafeAreaView>
       </Modal>
+      <ServiceChoice
+        visible={serviceChooser}
+        language={lang}
+        close={() => setServiceChooser(false)}
+        choose={(kind) => {
+          setServiceKind(kind);
+          if (kind === 'delivery') setDeliveryStep('cargo');
+          if (kind === 'ride' && cargoOnly(category)) setCategory('boda');
+          setServiceChooser(false);
+          void run(() => calculateQuotes(kind));
+        }}
+      />
       <Modal
         visible={confirmation}
         transparent
@@ -3538,9 +3814,9 @@ function App({ role }: { role: 'passenger' | 'driver' }) {
               </Text>
             ))}
             <Text style={s.fare}>
-              {selectedQuote ? money(selectedQuote.fare.total) : ''}
+              {selectedQuote?.fare ? money(selectedQuote.fare.total) : ''}
             </Text>
-            {selectedQuote?.fare.roundingIncrement === 500 && (
+            {selectedQuote?.fare?.roundingIncrement === 500 && (
               <Text style={s.small}>{t.fareRounding}</Text>
             )}
             <Text style={s.small}>{t.payment}</Text>

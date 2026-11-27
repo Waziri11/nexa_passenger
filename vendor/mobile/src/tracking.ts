@@ -12,7 +12,7 @@ type Context = {
   online: boolean;
   language?: 'sw' | 'en';
   previewAuth?: { id: string; secret: string };
-  category?: 'boda' | 'bajaji' | 'car';
+  category?: import('@nexadrop/core').Category;
 };
 let flushing = false;
 export async function enqueueLocation(

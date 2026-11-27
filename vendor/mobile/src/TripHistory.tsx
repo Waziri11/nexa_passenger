@@ -1,3 +1,4 @@
+import { CargoSummary } from './DeliveryFlow';
 import { Text, TextInput } from './themed-primitives';
 import React, { useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, View } from 'react-native';
@@ -171,6 +172,7 @@ export function TripHistory({
               ))}
               <Text style={s.small}>{t.destination}</Text>
               <Text style={s.heading}>{selected.destination_label}</Text>
+              <CargoSummary cargo={selected.cargo} language={lang} />
               <Text style={s.small}>{t.distance}</Text>
               <Text style={s.bold}>
                 {meters != null
@@ -208,11 +210,16 @@ export function TripHistory({
                 {[
                   selected.driver?.plate,
                   selected.driver?.vehicle_color,
-                  selected.category === 'car'
-                    ? 'Car Basic'
-                    : selected.category === 'boda'
-                      ? 'Boda'
-                      : 'Bajaji',
+                  (
+                    {
+                      boda: 'Boda',
+                      bajaji: 'Bajaji',
+                      car: 'Car Basic',
+                      toyo: 'Toyo',
+                      kirikuu: 'Kirikuu',
+                      truck: lang === 'sw' ? 'Lori' : 'Truck',
+                    } as Record<string, string>
+                  )[selected.category],
                 ]
                   .filter(Boolean)
                   .join(' · ')}
